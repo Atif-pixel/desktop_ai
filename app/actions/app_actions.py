@@ -10,6 +10,7 @@ No app automation beyond launching.
 
 from __future__ import annotations
 
+import difflib
 import os
 import shutil
 import subprocess
@@ -17,6 +18,9 @@ import webbrowser
 from typing import Optional
 
 from app.core.types import CommandResult, ParsedIntent
+
+
+_SUPPORTED_APPS = ["notepad", "calculator", "chrome"]
 
 
 def _find_chrome_exe() -> Optional[str]:
@@ -98,10 +102,16 @@ class AppActions:
                 message="Chrome not found; opened default browser instead.",
             )
 
+        closest = difflib.get_close_matches(app, _SUPPORTED_APPS, n=1, cutoff=0.6)
+        suggestion = f" Did you mean '{closest[0]}'?" if closest else ""
+
         return CommandResult(
             ok=False,
             executed=False,
-            message="App command not supported yet. Try 'open notepad', 'open calculator', or 'open chrome'.",
-            data={"app": app},
+            message=f"App '{app}' is not supported yet." + suggestion + " Supported: notepad, calculator, chrome.",
+            data={
+                "app": app,
+                "supported": _SUPPORTED_APPS,
+                "suggestion": closest[0] if closest else None,
+            },
         )
-

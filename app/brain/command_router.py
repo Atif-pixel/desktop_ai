@@ -53,6 +53,8 @@ class CommandRouter:
                     "  open chrome              Launch Chrome (or default browser)\n"
                     "  search <query>           Open browser search\n"
                     "  file <command>           File placeholder\n"
+                    "  voice | listen           (local) One-shot microphone input\n"
+                    "  text                     (local) Already in text mode\n"
                     "  exit | quit | stop        Exit the program"
                 ),
                 data={"builtin": "help"},
@@ -92,3 +94,5 @@ class CommandRouter:
             message="Unknown command. Type 'help' for options.",
             data={"intent": intent.raw_text, "intent_type": intent.intent_type.value},
         )
+
+
