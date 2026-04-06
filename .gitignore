@@ -22,10 +22,12 @@ coverage.xml
 *.log
 *.tmp
 
+# Local models (e.g., Vosk) - keep out of git
+model/
+
 # OS / IDE
 Thumbs.db
 Desktop.ini
 .DS_Store
 .vscode/
 .idea/
-
