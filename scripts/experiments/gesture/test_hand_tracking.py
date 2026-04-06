@@ -1,3 +1,8 @@
+"""
+Legacy gesture experiment script.
+
+Not part of the voice-first runtime structure (Step 2A).
+"""
 import cv2
 import time
 import pyautogui
