@@ -1,0 +1,7 @@
+# NOTE: Keep this minimal in Step 2A.
+# Runtime wiring is deferred; these reflect current experiment dependencies.
+numpy
+opencv-python
+mediapipe
+pyautogui
+
