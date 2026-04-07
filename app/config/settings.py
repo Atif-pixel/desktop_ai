@@ -1,7 +1,9 @@
-"""Settings model.
+﻿"""Settings model.
 
 Step 3B adds a small set of voice tuning values for one-shot microphone input.
 Step 3D adds a trailing-silence setting to reduce perceived delay.
+Step 4 adds basic TTS output settings.
+Step 5A adds an optional hotkey trigger configuration.
 
 Loading from env/files is still deferred.
 """
@@ -28,3 +30,13 @@ class Settings:
     voice_min_peak: int = 300
     voice_device_index: Optional[int] = None
     voice_trailing_silence_seconds: float = 0.6
+
+    # Text-to-speech output (Step 4).
+    tts_enabled: bool = True
+    tts_rate: int = 0
+
+    # Hotkey trigger for one-shot voice input (Step 5A).
+    # Requires the optional `keyboard` dependency.
+    hotkey_enabled: bool = True
+    hotkey_combo: str = "shift+v"
+

@@ -1,18 +1,22 @@
-"""Assistant runtime service.
+﻿"""Assistant runtime service.
 
 Step 3A added a controlled, one-shot voice input path.
 Step 3B improves debuggability and usability while keeping the architecture intact.
+Step 4 adds optional text-to-speech output.
 
 This does NOT add wakeword support or continuous listening.
 """
 
 from __future__ import annotations
 
+import sys
+
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from app.brain.orchestrator import Orchestrator
 from app.config.settings import Settings
+from app.core.logger import get_logger
 from app.core.state import AssistantState
 from app.core.types import AssistantRequest, AssistantResponse
 from app.input.voice.microphone import (
@@ -28,6 +32,7 @@ from app.input.voice.speech_to_text import (
     Transcript,
     VoskSpeechToText,
 )
+from app.output.text_to_speech import TextToSpeech, TextToSpeechConfig, default_text_to_speech
 
 
 @dataclass(frozen=True)
@@ -50,10 +55,12 @@ class AssistantRuntime:
         settings: Optional[Settings] = None,
         microphone: Optional[SoundDeviceMicrophone] = None,
         speech_to_text: Optional[SpeechToText] = None,
+        text_to_speech: Optional[TextToSpeech] = None,
     ) -> None:
         self._orchestrator = orchestrator or Orchestrator()
         self.settings = settings or Settings()
         self.state = AssistantState()
+        self._log = get_logger(__name__)
 
         self._microphone = microphone or SoundDeviceMicrophone(
             sample_rate_hz=self.settings.voice_sample_rate_hz,
@@ -64,12 +71,37 @@ class AssistantRuntime:
         )
         self._speech_to_text = speech_to_text or VoskSpeechToText()
 
+        tts_cfg = TextToSpeechConfig(enabled=self.settings.tts_enabled, rate=self.settings.tts_rate)
+        self._text_to_speech = text_to_speech or default_text_to_speech(tts_cfg)
+
     def process_text(self, text: str) -> AssistantResponse:
         """Process already-transcribed text."""
 
         self.state.last_user_text = text
         request = AssistantRequest(text=text)
         return self._orchestrator.handle(request)
+
+    @staticmethod
+    def _one_line_error(exc: Exception) -> str:
+        msg = str(exc).strip() or exc.__class__.__name__
+        return " ".join(msg.split())
+
+    def speak_text(self, text: str) -> None:
+        """Speak text using the configured TTS backend (failure-safe)."""
+
+        try:
+            self._text_to_speech.speak(text)
+        except Exception as exc:  # pragma: no cover
+            # Never break the assistant because TTS failed.
+            msg = self._one_line_error(exc)
+            print(f"TTS failed: {msg}", file=sys.stderr)
+            self._log.debug("TTS failed: %s", msg)
+            return None
+
+    def speak_response(self, response: AssistantResponse) -> None:
+        """Speak an assistant response (failure-safe)."""
+
+        self.speak_text(response.text)
 
     def listen_once(self) -> VoiceListenResult:
         """Capture and transcribe one utterance (no assistant processing)."""
@@ -78,7 +110,6 @@ class AssistantRuntime:
             "max_seconds": self.settings.voice_max_seconds,
         }
 
-        chunk = None
         try:
             chunk = self._microphone.record(max_seconds=self.settings.voice_max_seconds)
             diagnostics.update(
@@ -108,7 +139,9 @@ class AssistantRuntime:
             return VoiceListenResult(ok=False, error=f"Voice input failed: {exc}", diagnostics=diagnostics)
         except Exception as exc:  # pragma: no cover
             return VoiceListenResult(
-                ok=False, error=f"Voice input failed unexpectedly: {exc}", diagnostics=diagnostics
+                ok=False,
+                error=f"Voice input failed unexpectedly: {exc}",
+                diagnostics=diagnostics,
             )
 
     def process_voice_once(self) -> AssistantResponse:
@@ -124,4 +157,3 @@ class AssistantRuntime:
         metadata["transcript"] = listen.transcript.text
         metadata["stt_confidence"] = listen.transcript.confidence
         return AssistantResponse(text=response.text, result=response.result, metadata=metadata)
-
