@@ -1,4 +1,4 @@
-# Desktop Control AI (Windows 10/11)
+﻿# Desktop Control AI (Windows 10/11)
 
 Voice-first desktop assistant foundation for Windows.
 
@@ -10,12 +10,12 @@ Build a production-grade assistant that can control the desktop using voice (pri
 - Gesture code exists only as dormant legacy experiments under `gesture/` and `scripts/experiments/gesture/`
 - No gesture runtime is active
 
-## Current Status (Step 3A)
+## Current Status (Step 4)
 - The assistant is runnable in **text-mode**.
 - A controlled **one-shot voice input** path is available as a bridge before adding:
   - wakeword
   - continuous listening/background mode
-  - text-to-speech
+- Basic **text-to-speech (TTS)** is available and will speak assistant responses while still printing them.
 
 Text-mode remains the fallback and should keep working even if voice dependencies/models are missing.
 
@@ -28,6 +28,10 @@ Voice-mode is currently one-shot:
 
 `mic` -> `speech-to-text` -> `input(text)` -> (same pipeline)
 
+Output (Step 4):
+- responses are printed to the terminal
+- and optionally spoken via TTS
+
 Concrete runtime flow:
 - `app/main.py` (terminal loop)
 - `app/services/assistant_runtime.py` (runtime wiring + one-shot voice coordination)
@@ -36,6 +40,7 @@ Concrete runtime flow:
 - `app/brain/command_router.py` (routes to actions)
 - `app/actions/*` (does safe work or returns placeholder results)
 - `app/output/responder.py` (builds final response)
+- `app/output/text_to_speech.py` (speaks responses; failure-safe)
 
 ## Folder Structure
 Top-level:
@@ -48,7 +53,7 @@ Inside `app/`:
 - `app/input/voice/` microphone + STT (one-shot) + wakeword interface (wakeword not used yet)
 - `app/brain/` orchestrator + parsing + routing
 - `app/actions/` safe starter actions
-- `app/output/` responder + TTS interface (placeholder)
+- `app/output/` responder + TTS
 - `app/core/` shared types/enums/state/logger
 - `app/config/` settings/constants
 - `app/services/` runtime container
@@ -62,6 +67,10 @@ Install dependencies:
 - `pip install -r requirements.txt`
 
 ### Voice (One-Shot)
+
+Hotkey (Step 5A):
+- While the app is running, press `shift+v` to trigger one-shot listening (if hotkeys are available).
+- Disable/change via `app/config/settings.py` (`hotkey_enabled`, `hotkey_combo`).
 In the terminal app, type:
 - `voice` (or `listen`)
 
@@ -77,6 +86,11 @@ Vosk model:
 
 Voice capture tuning (optional):
 - edit `app/config/settings.py` (`voice_max_seconds`, `voice_sample_rate_hz`, `voice_min_peak`, `voice_trailing_silence_seconds`, `voice_device_index`)
+
+### TTS (Spoken Output)
+- By default, assistant responses are printed and also spoken.
+- TTS is implemented using Windows PowerShell + .NET `System.Speech` (offline/local).
+- Disable or tune it by editing `app/config/settings.py` (`tts_enabled`, `tts_rate`).
 
 ## Supported Commands
 
@@ -104,13 +118,10 @@ Next steps will focus on:
 - wakeword gating
 - continuous listening/background runtime
 - improve transcription reliability and device handling
-- implement TTS under `app/output/`
 - expand safe action set (Windows-focused)
 - add structured logging + config loading
 - add tests and CI
 - only then consider multimodal fusion / gesture re-integration
-
-
 
 
 

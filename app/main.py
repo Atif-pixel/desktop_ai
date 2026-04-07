@@ -1,15 +1,16 @@
-"""Canonical app entrypoint.
+﻿"""Canonical app entrypoint.
 
 Text-mode remains the primary dev harness.
 
 Step 3A added an optional, controlled one-shot voice input trigger.
 Step 3B improves voice-mode usability/diagnostics while keeping the same pipeline.
+Step 4 adds optional text-to-speech (TTS) output.
+Step 5A adds an optional hotkey trigger for one-shot voice input.
 
 Important:
 - No gesture runtime
 - No wakeword
 - No continuous / always-listening mode
-- No TTS
 
 Run:
   python -m app.main
@@ -17,8 +18,10 @@ Run:
 
 from __future__ import annotations
 
+import threading
 from typing import Iterable, Optional
 
+from app.input.voice.hotkey import HotkeyListener
 from app.services.assistant_runtime import AssistantRuntime
 
 
@@ -74,6 +77,39 @@ def _format_voice_diagnostics(d: dict) -> str:
     return " | ".join(parts)
 
 
+def _print_and_speak(runtime: AssistantRuntime, text: str) -> None:
+    print(text)
+    runtime.speak_text(text)
+
+
+def _run_one_shot_voice(runtime: AssistantRuntime, *, source: str, lock: threading.Lock) -> None:
+    # Avoid overlapping voice capture if both typed command + hotkey are used.
+    if not lock.acquire(blocking=False):
+        print("Already listening...")
+        return
+
+    try:
+        max_s = runtime.settings.voice_max_seconds
+        print(f"\nListening... (one-shot, up to {max_s:.0f}s) [{source}]")
+
+        listen = runtime.listen_once()
+        diag_line = _format_voice_diagnostics(listen.diagnostics)
+        if diag_line:
+            print(diag_line)
+
+        if not listen.ok or not listen.transcript:
+            print(listen.error or "Voice input failed.")
+            return
+
+        # Requirement: print transcript before processing it.
+        print(f"Heard: {listen.transcript.text}")
+
+        response = runtime.process_text(listen.transcript.text)
+        _print_and_speak(runtime, response.text)
+    finally:
+        lock.release()
+
+
 def run_text_loop(runtime: AssistantRuntime, *, prompt: str = "> ") -> int:
     """Run a blocking terminal loop."""
 
@@ -81,45 +117,56 @@ def run_text_loop(runtime: AssistantRuntime, *, prompt: str = "> ") -> int:
     print("Type 'help' for commands.")
     print("Type 'voice' to speak once. Type 'text' to confirm text mode. Type 'exit' to quit.")
 
-    while True:
-        try:
-            user_text = input(prompt)
-        except (EOFError, KeyboardInterrupt):
-            print()  # newline
-            break
+    voice_lock = threading.Lock()
 
-        if not user_text.strip():
-            continue
+    hotkey_listener = None
+    if getattr(runtime.settings, "hotkey_enabled", False):
+        combo = getattr(runtime.settings, "hotkey_combo", "shift+v")
 
-        if _is_exit_command(user_text):
-            break
+        def on_hotkey() -> None:
+            # Keep callback light; do work in a separate thread.
+            threading.Thread(
+                target=_run_one_shot_voice,
+                kwargs={"runtime": runtime, "source": f"hotkey:{combo}", "lock": voice_lock},
+                daemon=True,
+            ).start()
 
-        if _is_text_command(user_text):
-            print("Already in text mode.")
-            continue
+        hotkey_listener = HotkeyListener(combo, on_hotkey)
+        status = hotkey_listener.start()
+        if status.ok:
+            print(f"Hotkey: press {combo} to speak once.")
+        else:
+            print(f"Hotkey unavailable ({combo}): {status.error}")
+            hotkey_listener = None
 
-        if _is_voice_command(user_text):
-            max_s = runtime.settings.voice_max_seconds
-            print(f"Listening... (one-shot, up to {max_s:.0f}s)")
+    try:
+        while True:
+            try:
+                user_text = input(prompt)
+            except (EOFError, KeyboardInterrupt):
+                print()  # newline
+                break
 
-            listen = runtime.listen_once()
-            diag_line = _format_voice_diagnostics(listen.diagnostics)
-            if diag_line:
-                print(diag_line)
-
-            if not listen.ok or not listen.transcript:
-                print(listen.error or "Voice input failed.")
+            if not user_text.strip():
                 continue
 
-            # Requirement: print transcript before processing it.
-            print(f"Heard: {listen.transcript.text}")
+            if _is_exit_command(user_text):
+                break
 
-            response = runtime.process_text(listen.transcript.text)
-            print(response.text)
-            continue
+            if _is_text_command(user_text):
+                print("Already in text mode.")
+                continue
 
-        response = runtime.process_text(user_text)
-        print(response.text)
+            if _is_voice_command(user_text):
+                _run_one_shot_voice(runtime, source="typed", lock=voice_lock)
+                continue
+
+            response = runtime.process_text(user_text)
+            _print_and_speak(runtime, response.text)
+
+    finally:
+        if hotkey_listener is not None:
+            hotkey_listener.stop()
 
     print("Goodbye.")
     return 0
@@ -135,3 +182,4 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
