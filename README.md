@@ -96,6 +96,7 @@ Voice capture tuning (optional):
 
 Local (handled by terminal loop):
 - `voice` / `listen` -> one-shot microphone input
+- hotkey -> press `shift+v` to trigger one-shot listening (if enabled)
 - `text` -> already in text mode
 - `exit` / `quit` / `stop` -> exit
 
@@ -103,12 +104,23 @@ Assistant commands (text or transcribed voice):
 - `help` / `?` / `h` -> prints command list
 - `hello` / `hi` / `hey` -> greeting
 - `time` -> prints current local time
+- `date` -> prints today's date
+- `what day is it` -> prints day of week
+- `volume up` / `volume down` / `mute` -> safe volume controls (Windows)
 - `open notepad` -> launches Notepad
 - `open calculator` (or `open calc`) -> launches Calculator
 - `open chrome` -> launches Chrome if found; otherwise opens default browser
-- `search <query>` -> opens a browser search in the default browser
-- `file <command>` -> placeholder (not implemented yet)
-
+- `open vscode` -> launches VS Code if found
+- `open explorer` -> opens File Explorer
+- `open settings` -> opens Windows Settings
+- `open downloads` -> opens Downloads folder
+- `open desktop` -> opens Desktop folder
+- `open youtube` -> opens YouTube
+- `open gmail` -> opens Gmail
+- `search <query>` -> Google search in default browser
+- `search google <query>` -> Google search
+- `search youtube <query>` -> YouTube search
+- `file <command>` -> limited safe navigation (try `file downloads` or `file desktop`)
 ## Notes On Gesture
 Gesture is intentionally not part of the active runtime.
 The goal is to stabilize the voice-first assistant foundation first.
@@ -122,6 +134,7 @@ Next steps will focus on:
 - add structured logging + config loading
 - add tests and CI
 - only then consider multimodal fusion / gesture re-integration
+
 
 
 

@@ -77,9 +77,9 @@ def _format_voice_diagnostics(d: dict) -> str:
     return " | ".join(parts)
 
 
-def _print_and_speak(runtime: AssistantRuntime, text: str) -> None:
-    print(text)
-    runtime.speak_text(text)
+def _print_and_speak(runtime: AssistantRuntime, response) -> None:
+    print(response.text)
+    runtime.speak_response(response)
 
 
 def _run_one_shot_voice(runtime: AssistantRuntime, *, source: str, lock: threading.Lock) -> None:
@@ -105,7 +105,7 @@ def _run_one_shot_voice(runtime: AssistantRuntime, *, source: str, lock: threadi
         print(f"Heard: {listen.transcript.text}")
 
         response = runtime.process_text(listen.transcript.text)
-        _print_and_speak(runtime, response.text)
+        _print_and_speak(runtime, response)
     finally:
         lock.release()
 
@@ -162,7 +162,7 @@ def run_text_loop(runtime: AssistantRuntime, *, prompt: str = "> ") -> int:
                 continue
 
             response = runtime.process_text(user_text)
-            _print_and_speak(runtime, response.text)
+            _print_and_speak(runtime, response)
 
     finally:
         if hotkey_listener is not None:
@@ -182,4 +182,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
 

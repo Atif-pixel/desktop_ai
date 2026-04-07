@@ -99,9 +99,25 @@ class AssistantRuntime:
             return None
 
     def speak_response(self, response: AssistantResponse) -> None:
-        """Speak an assistant response (failure-safe)."""
+        """Speak an assistant response (failure-safe).
 
-        self.speak_text(response.text)
+        Step 5C: avoid speaking the full global help text.
+        """
+
+        result = response.result
+        data = result.data if result is not None else {}
+        if isinstance(data, dict) and data.get("builtin") == "help":
+            section = data.get("section")
+            if isinstance(section, str) and section.strip():
+                # Section help is short enough to read aloud.
+                return self.speak_text(response.text)
+
+            return self.speak_text(
+                "I displayed the available commands on screen. "
+                "Say app help, browser help, system help, or file help for a shorter list."
+            )
+
+        return self.speak_text(response.text)
 
     def listen_once(self) -> VoiceListenResult:
         """Capture and transcribe one utterance (no assistant processing)."""
@@ -157,3 +173,4 @@ class AssistantRuntime:
         metadata["transcript"] = listen.transcript.text
         metadata["stt_confidence"] = listen.transcript.confidence
         return AssistantResponse(text=response.text, result=response.result, metadata=metadata)
+

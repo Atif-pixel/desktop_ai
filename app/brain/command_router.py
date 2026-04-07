@@ -1,8 +1,8 @@
-"""Command routing.
+﻿"""Command routing.
 
 Routes a parsed intent to an action handler.
 
-Step 2D keeps routing modular:
+Keeps routing modular:
 - intent parsing classifies + extracts parameters
 - router picks the action area
 - action modules do the real work (or safe placeholders)
@@ -18,6 +18,73 @@ from app.actions.file_actions import FileActions
 from app.actions.system_actions import SystemActions
 from app.core.enums import IntentType
 from app.core.types import CommandResult, ParsedIntent
+
+
+_GLOBAL_HELP_TEXT = (
+    "Commands:\n"
+    "  help                     Show this help\n"
+    "  hello | hi               Greeting\n"
+    "  time                     Show current time\n"
+    "  date                     Show today's date\n"
+    "  what day is it           Show day of week\n"
+    "  volume up                Increase volume\n"
+    "  volume down              Decrease volume\n"
+    "  mute                     Toggle mute\n"
+    "  open notepad             Launch Notepad\n"
+    "  open calculator          Launch Calculator\n"
+    "  open chrome              Launch Chrome (or default browser)\n"
+    "  open vscode              Launch VS Code\n"
+    "  open explorer            Launch File Explorer\n"
+    "  open settings            Open Windows Settings\n"
+    "  open downloads           Open Downloads folder\n"
+    "  open desktop             Open Desktop folder\n"
+    "  open youtube             Open YouTube\n"
+    "  open gmail               Open Gmail\n"
+    "  search <query>           Google search\n"
+    "  search google <query>    Google search\n"
+    "  search youtube <query>   YouTube search\n"
+    "  file <command>           Limited file navigation\n"
+    "  voice | listen           (local) One-shot microphone input\n"
+    "  text                     (local) Already in text mode\n"
+    "  exit | quit | stop        Exit the program"
+)
+
+
+_SECTION_HELP: dict[str, str] = {
+    "app": (
+        "App commands:\n"
+        "  open notepad\n"
+        "  open calculator\n"
+        "  open chrome\n"
+        "  open vscode\n"
+        "  open explorer\n"
+        "  open settings"
+    ),
+    "browser": (
+        "Browser commands:\n"
+        "  open youtube\n"
+        "  open gmail\n"
+        "  search <query>\n"
+        "  search google <query>\n"
+        "  search youtube <query>"
+    ),
+    "system": (
+        "System commands:\n"
+        "  time\n"
+        "  date\n"
+        "  what day is it\n"
+        "  volume up\n"
+        "  volume down\n"
+        "  mute"
+    ),
+    "file": (
+        "File commands:\n"
+        "  open downloads\n"
+        "  open desktop\n"
+        "  file downloads\n"
+        "  file desktop"
+    ),
+}
 
 
 class CommandRouter:
@@ -40,23 +107,22 @@ class CommandRouter:
         builtin = entities.get("builtin")
 
         if builtin == "help":
+            section = entities.get("section")
+            if isinstance(section, str) and section.strip():
+                key = section.strip().lower()
+                text = _SECTION_HELP.get(key)
+                if text:
+                    return CommandResult(
+                        ok=True,
+                        executed=False,
+                        message=text,
+                        data={"builtin": "help", "section": key},
+                    )
+
             return CommandResult(
                 ok=True,
                 executed=False,
-                message=(
-                    "Commands:\n"
-                    "  help                     Show this help\n"
-                    "  hello | hi               Greeting\n"
-                    "  time                     Show current time\n"
-                    "  open notepad             Launch Notepad\n"
-                    "  open calculator          Launch Calculator\n"
-                    "  open chrome              Launch Chrome (or default browser)\n"
-                    "  search <query>           Open browser search\n"
-                    "  file <command>           File placeholder\n"
-                    "  voice | listen           (local) One-shot microphone input\n"
-                    "  text                     (local) Already in text mode\n"
-                    "  exit | quit | stop        Exit the program"
-                ),
+                message=_GLOBAL_HELP_TEXT,
                 data={"builtin": "help"},
             )
 
@@ -94,5 +160,3 @@ class CommandRouter:
             message="Unknown command. Type 'help' for options.",
             data={"intent": intent.raw_text, "intent_type": intent.intent_type.value},
         )
-
-

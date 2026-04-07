@@ -1,8 +1,10 @@
-"""Intent parsing.
+﻿"""Intent parsing.
 
 Deterministic, rule-based parsing for a small, useful command set.
 
 Step 3D improves spoken-phrase tolerance by normalizing text before matching.
+Step 5B expands rule coverage for a larger safe command set.
+
 This is still intentionally *not* full NLP.
 """
 
@@ -17,6 +19,41 @@ from app.core.types import AssistantRequest, ParsedIntent
 _EXIT_WORDS = {"exit", "quit", "stop"}
 _GREET_WORDS = {"hi", "hello", "hey"}
 _ASSISTANT_NAMES = {"jarvis", "assistant"}
+
+_BROWSER_SITES = {
+    "youtube": "youtube",
+    "gmail": "gmail",
+}
+
+_FILE_TARGETS = {
+    "downloads": "downloads",
+    "download": "downloads",
+    "desktop": "desktop",
+}
+
+_APP_ALIASES = {
+    "calc": "calculator",
+    "calculator": "calculator",
+    "google chrome": "chrome",
+    "chrome": "chrome",
+    "file explorer": "explorer",
+    "explorer": "explorer",
+    "windows explorer": "explorer",
+    "vs code": "vscode",
+    "vscode": "vscode",
+    "visual studio code": "vscode",
+    "settings": "settings",
+    "windows settings": "settings",
+}
+
+_VOLUME_PHRASES = {
+    "volume up": "volume_up",
+    "increase volume": "volume_up",
+    "volume down": "volume_down",
+    "decrease volume": "volume_down",
+    "mute": "mute",
+    "unmute": "unmute",
+}
 
 
 def _collapse_spaces(text: str) -> str:
@@ -82,7 +119,7 @@ def _strip_leading_request_phrases(text: str) -> str:
         "could you ",
         "would you ",
         "please ",
-        "hey ",
+        "hey buddy ",
     )
 
     out = text
@@ -96,6 +133,17 @@ def _strip_leading_request_phrases(text: str) -> str:
             break
 
     return out
+
+
+def _normalize_open_target(text: str) -> str:
+    # Normalize some common multi-word targets first.
+    t = _collapse_spaces(text)
+
+    # Spoken variants: "open downloads folder" / "open the desktop folder".
+    if t.endswith(" folder"):
+        t = t[:-7].strip()
+
+    return _APP_ALIASES.get(t, t)
 
 
 class IntentParser:
@@ -120,10 +168,20 @@ class IntentParser:
         normalized = _strip_leading_request_phrases(normalized)
 
         if normalized in {"help", "h"} or normalized.startswith("help "):
+            section = None
+            if normalized.startswith("help "):
+                rest = normalized[len("help ") :].strip()
+                if rest in {"app", "browser", "system", "file"}:
+                    section = rest
+
+            entities = {"builtin": "help"}
+            if section:
+                entities["section"] = section
+
             return ParsedIntent(
                 intent_type=IntentType.CHAT,
                 raw_text=raw_text,
-                entities={"builtin": "help"},
+                entities=entities,
             )
 
         if normalized in _GREET_WORDS:
@@ -153,6 +211,41 @@ class IntentParser:
                 entities={"builtin": "time"},
             )
 
+        if normalized == "date" or normalized.startswith("what date") or normalized.endswith(" date"):
+            return ParsedIntent(
+                intent_type=IntentType.SYSTEM,
+                raw_text=raw_text,
+                entities={"command": "date"},
+            )
+
+        if (
+            normalized in {"what day is it", "what day is today", "day"}
+            or normalized.startswith("what day")
+            or normalized.endswith(" day")
+        ):
+            return ParsedIntent(
+                intent_type=IntentType.SYSTEM,
+                raw_text=raw_text,
+                entities={"command": "day"},
+            )
+
+        if normalized in _VOLUME_PHRASES:
+            return ParsedIntent(
+                intent_type=IntentType.SYSTEM,
+                raw_text=raw_text,
+                entities={"command": _VOLUME_PHRASES[normalized]},
+            )
+
+
+        # Section help: "app help" / "browser help" / "system help" / "file help".
+        if normalized.endswith(" help"):
+            parts = normalized.split(" ")
+            if len(parts) == 2 and parts[1] == "help" and parts[0] in {"app", "browser", "system", "file"}:
+                return ParsedIntent(
+                    intent_type=IntentType.CHAT,
+                    raw_text=raw_text,
+                    entities={"builtin": "help", "section": parts[0]},
+                )
         # Explicit category prefixes keep routing obvious and debuggable.
         for prefix, intent_type in (
             ("system ", IntentType.SYSTEM),
@@ -167,6 +260,14 @@ class IntentParser:
                     entities={"command": normalized[len(prefix) :].strip()},
                 )
 
+        # Direct site names.
+        if normalized in _BROWSER_SITES:
+            return ParsedIntent(
+                intent_type=IntentType.BROWSER,
+                raw_text=raw_text,
+                entities={"site": _BROWSER_SITES[normalized]},
+            )
+
         tokens = normalized.split(" ")
 
         # Open command can appear inside a spoken request, e.g. "can you open chrome".
@@ -178,12 +279,24 @@ class IntentParser:
                 rest = rest[1:]
 
             if rest:
-                cmd = " ".join(rest).strip()
-                # Normalize common short forms.
-                if cmd in {"calc", "calculator"}:
-                    cmd = "calculator"
-                if cmd in {"google chrome"}:
-                    cmd = "chrome"
+                cmd_raw = " ".join(rest).strip()
+                cmd = _normalize_open_target(cmd_raw)
+
+                # Some open targets are better represented as browser actions.
+                if cmd in _BROWSER_SITES:
+                    return ParsedIntent(
+                        intent_type=IntentType.BROWSER,
+                        raw_text=raw_text,
+                        entities={"site": _BROWSER_SITES[cmd]},
+                    )
+
+                # Some open targets are safe file navigation.
+                if cmd in _FILE_TARGETS:
+                    return ParsedIntent(
+                        intent_type=IntentType.FILE,
+                        raw_text=raw_text,
+                        entities={"target": _FILE_TARGETS[cmd]},
+                    )
 
                 return ParsedIntent(
                     intent_type=IntentType.APP,
@@ -191,11 +304,19 @@ class IntentParser:
                     entities={"command": cmd},
                 )
 
-        # Search command: "search cats" / "search for cats".
+        # Search command: "search cats" / "search youtube cats" / "search google cats".
         if "search" in tokens:
             idx = tokens.index("search")
             rest = tokens[idx + 1 :]
             if rest and rest[0] == "for":
+                rest = rest[1:]
+
+            engine = "google"
+            if rest and rest[0] in {"youtube", "yt"}:
+                engine = "youtube"
+                rest = rest[1:]
+            elif rest and rest[0] == "google":
+                engine = "google"
                 rest = rest[1:]
 
             query = " ".join(rest).strip()
@@ -203,7 +324,10 @@ class IntentParser:
                 return ParsedIntent(
                     intent_type=IntentType.BROWSER,
                     raw_text=raw_text,
-                    entities={"query": query},
+                    entities={"engine": engine, "query": query},
                 )
 
         return ParsedIntent(intent_type=IntentType.UNKNOWN, raw_text=raw_text)
+
+
+
