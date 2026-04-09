@@ -3,8 +3,11 @@
 Safe behavior:
 - Open a URL in the default browser
 
-Step 2D started with a generic Google search.
-Step 5B expands support for a few common sites and search targets.
+Supports:
+- open youtube / open gmail
+- search <query> (Google)
+- search google <query>
+- search youtube <query>
 
 No browser automation beyond opening a URL.
 """
@@ -12,6 +15,7 @@ No browser automation beyond opening a URL.
 from __future__ import annotations
 
 import webbrowser
+from typing import Any, Dict, Optional
 from urllib.parse import quote_plus
 
 from app.core.types import CommandResult, ParsedIntent
@@ -49,29 +53,30 @@ class BrowserActions:
                     data={"site": key},
                 )
 
-            return self._open_url(url, message=f"Opening {key}...")
+            return self._open_url(url, message=f"Opening {key}...", extra_data={"site": key})
 
         query = entities.get("query")
         engine = entities.get("engine")
 
         if isinstance(query, str) and query.strip():
             q = query.strip()
-            eng = (engine or "google")
-            if not isinstance(eng, str):
-                eng = "google"
-            eng = eng.strip().lower()
+            eng = engine if isinstance(engine, str) else "google"
+            eng = (eng or "google").strip().lower()
 
             if eng in {"youtube", "yt"}:
                 url = _youtube_search_url(q)
-                return self._open_url(url, message=f"Searching YouTube: {q}")
+                return self._open_url(
+                    url,
+                    message=f"Searching YouTube: {q}",
+                    extra_data={"engine": "youtube", "query": q},
+                )
 
-            # Default to Google search.
             url = _google_search_url(q)
-            if eng not in {"google", ""}:
-                # Keep behavior predictable even if unknown engine string appears.
-                return self._open_url(url, message=f"Searching: {q}")
-
-            return self._open_url(url, message=f"Searching: {q}")
+            return self._open_url(
+                url,
+                message=f"Searching: {q}",
+                extra_data={"engine": "google", "query": q},
+            )
 
         return CommandResult(
             ok=False,
@@ -83,7 +88,11 @@ class BrowserActions:
             data={"intent": intent.raw_text},
         )
 
-    def _open_url(self, url: str, *, message: str) -> CommandResult:
+    def _open_url(self, url: str, *, message: str, extra_data: Optional[Dict[str, Any]] = None) -> CommandResult:
+        data: Dict[str, Any] = {"url": url}
+        if extra_data:
+            data.update(extra_data)
+
         try:
             opened = webbrowser.open(url, new=2)
         except Exception as exc:
@@ -91,12 +100,12 @@ class BrowserActions:
                 ok=False,
                 executed=False,
                 message=f"Failed to open browser: {exc}",
-                data={"url": url},
+                data=data,
             )
 
         return CommandResult(
             ok=True,
             executed=bool(opened),
             message=message,
-            data={"url": url},
+            data=data,
         )

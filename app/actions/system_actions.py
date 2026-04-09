@@ -89,16 +89,16 @@ class SystemActions:
             try:
                 if cmd == "volume_up":
                     _send_vk(VK_VOLUME_UP)
-                    return CommandResult(ok=True, executed=True, message="Volume up.")
+                    return CommandResult(ok=True, executed=True, message="Volume up.", data={"command": "volume_up"})
                 if cmd == "volume_down":
                     _send_vk(VK_VOLUME_DOWN)
-                    return CommandResult(ok=True, executed=True, message="Volume down.")
+                    return CommandResult(ok=True, executed=True, message="Volume down.", data={"command": "volume_down"})
 
                 # Mute/unmute are toggle at the OS level.
                 _send_vk(VK_VOLUME_MUTE)
                 if cmd == "unmute":
-                    return CommandResult(ok=True, executed=True, message="Unmute (toggle).")
-                return CommandResult(ok=True, executed=True, message="Mute (toggle).")
+                    return CommandResult(ok=True, executed=True, message="Unmute (toggle).", data={"command": "unmute"})
+                return CommandResult(ok=True, executed=True, message="Mute (toggle).", data={"command": "mute"})
             except Exception as exc:
                 return CommandResult(
                     ok=False,
@@ -113,3 +113,4 @@ class SystemActions:
             message="System command not supported yet. Try 'time', 'date', 'what day is it', or 'help'.",
             data={"intent": intent.raw_text},
         )
+

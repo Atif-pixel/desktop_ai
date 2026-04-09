@@ -105,14 +105,14 @@ class AppActions:
                 subprocess.Popen(["notepad.exe"])
             except Exception as exc:
                 return CommandResult(ok=False, executed=False, message=f"Failed to open Notepad: {exc}")
-            return CommandResult(ok=True, executed=True, message="Opened Notepad.")
+            return CommandResult(ok=True, executed=True, message="Opened Notepad.", data={"app": "notepad"})
 
         if app in {"calc", "calculator", "calculator.exe"}:
             try:
                 subprocess.Popen(["calc.exe"])
             except Exception as exc:
                 return CommandResult(ok=False, executed=False, message=f"Failed to open Calculator: {exc}")
-            return CommandResult(ok=True, executed=True, message="Opened Calculator.")
+            return CommandResult(ok=True, executed=True, message="Opened Calculator.", data={"app": "calculator"})
 
         if app in {"chrome", "google chrome"}:
             chrome = _find_chrome_exe()
@@ -121,7 +121,7 @@ class AppActions:
                     subprocess.Popen([chrome])
                 except Exception as exc:
                     return CommandResult(ok=False, executed=False, message=f"Failed to open Chrome: {exc}")
-                return CommandResult(ok=True, executed=True, message="Opened Chrome.")
+                return CommandResult(ok=True, executed=True, message="Opened Chrome.", data={"app": "chrome"})
 
             # Fallback: open default browser rather than failing.
             try:
@@ -156,7 +156,7 @@ class AppActions:
             except Exception as exc:
                 return CommandResult(ok=False, executed=False, message=f"Failed to open VS Code: {exc}")
 
-            return CommandResult(ok=True, executed=True, message="Opened VS Code.")
+            return CommandResult(ok=True, executed=True, message="Opened VS Code.", data={"app": "vscode"})
 
         if app in {"explorer", "file explorer", "windows explorer"}:
             try:
@@ -164,7 +164,7 @@ class AppActions:
             except Exception as exc:
                 return CommandResult(ok=False, executed=False, message=f"Failed to open File Explorer: {exc}")
 
-            return CommandResult(ok=True, executed=True, message="Opened File Explorer.")
+            return CommandResult(ok=True, executed=True, message="Opened File Explorer.", data={"app": "explorer"})
 
         if app in {"settings", "windows settings"}:
             # Use the ms-settings URI scheme.
@@ -173,7 +173,7 @@ class AppActions:
             except Exception as exc:
                 return CommandResult(ok=False, executed=False, message=f"Failed to open Settings: {exc}")
 
-            return CommandResult(ok=True, executed=True, message="Opened Settings.")
+            return CommandResult(ok=True, executed=True, message="Opened Settings.", data={"app": "settings"})
 
         closest = difflib.get_close_matches(app, _SUPPORTED_APPS, n=1, cutoff=0.6)
         suggestion = f" Did you mean '{closest[0]}'?" if closest else ""
@@ -188,3 +188,4 @@ class AppActions:
                 "suggestion": closest[0] if closest else None,
             },
         )
+
