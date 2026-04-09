@@ -1,8 +1,6 @@
 ﻿"""Assistant runtime service.
 
-Step 3A added a controlled, one-shot voice input path.
-Step 3B improves debuggability and usability while keeping the architecture intact.
-Step 4 adds optional text-to-speech output.
+Step 7: adds a small in-memory session context layer to support safe follow-ups.
 
 This does NOT add wakeword support or continuous listening.
 """
@@ -16,6 +14,7 @@ from typing import Any, Dict, Optional
 
 from app.brain.orchestrator import Orchestrator
 from app.config.settings import Settings
+from app.core.enums import IntentType
 from app.core.logger import get_logger
 from app.core.state import AssistantState
 from app.core.types import AssistantRequest, AssistantResponse
@@ -78,8 +77,54 @@ class AssistantRuntime:
         """Process already-transcribed text."""
 
         self.state.last_user_text = text
-        request = AssistantRequest(text=text)
-        return self._orchestrator.handle(request)
+
+        request = AssistantRequest(
+            text=text,
+            metadata={"session": self.state.session_context()},
+        )
+
+        response = self._orchestrator.handle(request)
+        self._update_session_state(response)
+        return response
+
+    def _update_session_state(self, response: AssistantResponse) -> None:
+        md = response.metadata if isinstance(response.metadata, dict) else {}
+
+        intent_type = md.get("intent_type")
+        if isinstance(intent_type, str):
+            try:
+                self.state.last_intent = IntentType(intent_type)
+            except Exception:
+                self.state.last_intent = IntentType.UNKNOWN
+
+        entities = md.get("intent_entities")
+        self.state.last_intent_entities = entities if isinstance(entities, dict) else {}
+
+        action_area = md.get("action_area")
+        self.state.last_action_area = action_area if isinstance(action_area, str) else ""
+
+        result = response.result
+        data = result.data if (result is not None and isinstance(result.data, dict)) else {}
+
+        # Record last successful open/search targets for follow-ups.
+        if result is not None and result.ok and result.executed:
+            app = data.get("app")
+            if isinstance(app, str) and app.strip():
+                self.state.last_open_app = app.strip().lower()
+
+            site = data.get("site")
+            if isinstance(site, str) and site.strip():
+                self.state.last_browser_site = site.strip().lower()
+
+            engine = data.get("engine")
+            query = data.get("query")
+            if isinstance(engine, str) and engine.strip() and isinstance(query, str) and query.strip():
+                self.state.last_search_engine = engine.strip().lower()
+                self.state.last_search_query = query.strip()
+
+            target = data.get("target")
+            if isinstance(target, str) and target.strip():
+                self.state.last_file_target = target.strip().lower()
 
     @staticmethod
     def _one_line_error(exc: Exception) -> str:
@@ -92,7 +137,6 @@ class AssistantRuntime:
         try:
             self._text_to_speech.speak(text)
         except Exception as exc:  # pragma: no cover
-            # Never break the assistant because TTS failed.
             msg = self._one_line_error(exc)
             print(f"TTS failed: {msg}", file=sys.stderr)
             self._log.debug("TTS failed: %s", msg)
@@ -109,7 +153,6 @@ class AssistantRuntime:
         if isinstance(data, dict) and data.get("builtin") == "help":
             section = data.get("section")
             if isinstance(section, str) and section.strip():
-                # Section help is short enough to read aloud.
                 return self.speak_text(response.text)
 
             return self.speak_text(
@@ -149,7 +192,6 @@ class AssistantRuntime:
         except NoSpeechDetected as exc:
             return VoiceListenResult(ok=False, error=str(exc), diagnostics=diagnostics)
         except SpeechNotUnderstood as exc:
-            # Distinct from microphone failures: audio was captured but STT produced no text.
             return VoiceListenResult(ok=False, error=str(exc), diagnostics=diagnostics)
         except (MicrophoneError, SpeechToTextError) as exc:
             return VoiceListenResult(ok=False, error=f"Voice input failed: {exc}", diagnostics=diagnostics)
@@ -173,4 +215,3 @@ class AssistantRuntime:
         metadata["transcript"] = listen.transcript.text
         metadata["stt_confidence"] = listen.transcript.confidence
         return AssistantResponse(text=response.text, result=response.result, metadata=metadata)
-

@@ -1,9 +1,10 @@
-"""Orchestrator (brain).
+﻿"""Orchestrator (brain).
 
-Voice-first flow (Step 2B skeleton):
+Voice-first flow:
 request -> intent_parser -> command_router -> responder -> response
 
-No runtime loop and no OS execution in Step 2B.
+Step 7: attach minimal metadata to responses so the runtime can update its
+session state without changing the overall architecture.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from app.output.responder import Responder
 
 
 class Orchestrator:
-    """Coordinate parsing, routing, and response building (placeholder)."""
+    """Coordinate parsing, routing, and response building."""
 
     def __init__(
         self,
@@ -32,5 +33,16 @@ class Orchestrator:
     def handle(self, request: AssistantRequest) -> AssistantResponse:
         intent = self._intent_parser.parse(request)
         result = self._command_router.route(intent)
-        return self._responder.build(intent=intent, result=result)
+        response = self._responder.build(intent=intent, result=result)
 
+        metadata = dict(response.metadata)
+        metadata.update(
+            {
+                "intent_type": intent.intent_type.value,
+                "intent_raw_text": intent.raw_text,
+                "intent_entities": dict(intent.entities or {}),
+                "action_area": intent.intent_type.value,
+            }
+        )
+
+        return AssistantResponse(text=response.text, result=response.result, metadata=metadata)

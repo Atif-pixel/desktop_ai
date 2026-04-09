@@ -1,16 +1,17 @@
 ﻿"""Intent parsing.
 
-Deterministic, rule-based parsing for a small, useful command set.
+Deterministic, rule-based parsing.
 
-Step 3D improves spoken-phrase tolerance by normalizing text before matching.
-Step 5B expands rule coverage for a larger safe command set.
+Step 7 adds a minimal session-context aware follow-up layer to support safe
+references like "it" / "that" / "again".
 
-This is still intentionally *not* full NLP.
+This remains intentionally *not* full NLP.
 """
 
 from __future__ import annotations
 
 import re
+from typing import Any, Dict
 
 from app.core.enums import IntentType
 from app.core.types import AssistantRequest, ParsedIntent
@@ -54,6 +55,8 @@ _VOLUME_PHRASES = {
     "mute": "mute",
     "unmute": "unmute",
 }
+
+_REF_WORDS = {"it", "that", "this"}
 
 
 def _collapse_spaces(text: str) -> str:
@@ -113,13 +116,12 @@ def _normalize_for_intent(text: str) -> str:
 
 
 def _strip_leading_request_phrases(text: str) -> str:
-    # Very small set of spoken prefixes.
     prefixes = (
         "can you ",
         "could you ",
         "would you ",
         "please ",
-        "hey buddy ",
+        "hey ",
     )
 
     out = text
@@ -136,7 +138,6 @@ def _strip_leading_request_phrases(text: str) -> str:
 
 
 def _normalize_open_target(text: str) -> str:
-    # Normalize some common multi-word targets first.
     t = _collapse_spaces(text)
 
     # Spoken variants: "open downloads folder" / "open the desktop folder".
@@ -144,6 +145,25 @@ def _normalize_open_target(text: str) -> str:
         t = t[:-7].strip()
 
     return _APP_ALIASES.get(t, t)
+
+
+def _session_ctx(request: AssistantRequest) -> Dict[str, Any]:
+    md = request.metadata if isinstance(request.metadata, dict) else {}
+    ctx = md.get("session")
+    return ctx if isinstance(ctx, dict) else {}
+
+
+def _ctx_str(ctx: Dict[str, Any], key: str) -> str:
+    v = ctx.get(key)
+    return v.strip() if isinstance(v, str) else ""
+
+
+def _clarify(raw_text: str, message: str) -> ParsedIntent:
+    return ParsedIntent(
+        intent_type=IntentType.CHAT,
+        raw_text=raw_text,
+        entities={"builtin": "clarify", "message": message},
+    )
 
 
 class IntentParser:
@@ -161,12 +181,13 @@ class IntentParser:
             )
 
         normalized = _normalize_for_intent(raw_text)
-
         if not normalized:
             return ParsedIntent(intent_type=IntentType.UNKNOWN, raw_text="")
 
         normalized = _strip_leading_request_phrases(normalized)
+        ctx = _session_ctx(request)
 
+        # Help and section help.
         if normalized in {"help", "h"} or normalized.startswith("help "):
             section = None
             if normalized.startswith("help "):
@@ -178,11 +199,16 @@ class IntentParser:
             if section:
                 entities["section"] = section
 
-            return ParsedIntent(
-                intent_type=IntentType.CHAT,
-                raw_text=raw_text,
-                entities=entities,
-            )
+            return ParsedIntent(intent_type=IntentType.CHAT, raw_text=raw_text, entities=entities)
+
+        if normalized.endswith(" help"):
+            parts = normalized.split(" ")
+            if len(parts) == 2 and parts[1] == "help" and parts[0] in {"app", "browser", "system", "file"}:
+                return ParsedIntent(
+                    intent_type=IntentType.CHAT,
+                    raw_text=raw_text,
+                    entities={"builtin": "help", "section": parts[0]},
+                )
 
         if normalized in _GREET_WORDS:
             return ParsedIntent(
@@ -236,17 +262,7 @@ class IntentParser:
                 entities={"command": _VOLUME_PHRASES[normalized]},
             )
 
-
-        # Section help: "app help" / "browser help" / "system help" / "file help".
-        if normalized.endswith(" help"):
-            parts = normalized.split(" ")
-            if len(parts) == 2 and parts[1] == "help" and parts[0] in {"app", "browser", "system", "file"}:
-                return ParsedIntent(
-                    intent_type=IntentType.CHAT,
-                    raw_text=raw_text,
-                    entities={"builtin": "help", "section": parts[0]},
-                )
-        # Explicit category prefixes keep routing obvious and debuggable.
+        # Explicit category prefixes.
         for prefix, intent_type in (
             ("system ", IntentType.SYSTEM),
             ("app ", IntentType.APP),
@@ -270,19 +286,38 @@ class IntentParser:
 
         tokens = normalized.split(" ")
 
-        # Open command can appear inside a spoken request, e.g. "can you open chrome".
+        # Follow-up: "do that on youtube" / "do it on youtube".
+        if normalized.startswith("do ") and normalized.endswith(" on youtube"):
+            mid = normalized[len("do ") : -len(" on youtube")].strip()
+            if mid in _REF_WORDS:
+                last_query = _ctx_str(ctx, "last_search_query")
+                if not last_query:
+                    return _clarify(raw_text, "I'm not sure what 'that' refers to. Please say what to search.")
+                return ParsedIntent(
+                    intent_type=IntentType.BROWSER,
+                    raw_text=raw_text,
+                    entities={"engine": "youtube", "query": last_query},
+                )
+
+        # Open command.
         if "open" in tokens:
             idx = tokens.index("open")
             rest = tokens[idx + 1 :]
-            # Remove simple articles: "open the calculator".
             if rest and rest[0] in {"the", "a", "an"}:
                 rest = rest[1:]
 
             if rest:
                 cmd_raw = " ".join(rest).strip()
-                cmd = _normalize_open_target(cmd_raw)
 
-                # Some open targets are better represented as browser actions.
+                # Follow-up: "open it" / "open it again".
+                if cmd_raw in {"it", "it again", "that", "that again"}:
+                    last_app = _ctx_str(ctx, "last_open_app")
+                    if not last_app:
+                        return _clarify(raw_text, "I'm not sure what 'it' refers to. Please say the app name.")
+                    cmd = last_app
+                else:
+                    cmd = _normalize_open_target(cmd_raw)
+
                 if cmd in _BROWSER_SITES:
                     return ParsedIntent(
                         intent_type=IntentType.BROWSER,
@@ -290,7 +325,6 @@ class IntentParser:
                         entities={"site": _BROWSER_SITES[cmd]},
                     )
 
-                # Some open targets are safe file navigation.
                 if cmd in _FILE_TARGETS:
                     return ParsedIntent(
                         intent_type=IntentType.FILE,
@@ -304,9 +338,22 @@ class IntentParser:
                     entities={"command": cmd},
                 )
 
-        # Search command: "search cats" / "search youtube cats" / "search google cats".
-        if "search" in tokens:
-            idx = tokens.index("search")
+        # Search command.
+        if "search" in tokens or normalized.startswith("search "):
+            # Special: "search <x> on youtube".
+            if normalized.startswith("search ") and normalized.endswith(" on youtube"):
+                mid = normalized[len("search ") : -len(" on youtube")].strip()
+                if mid in _REF_WORDS:
+                    mid = _ctx_str(ctx, "last_search_query")
+                if not mid:
+                    return _clarify(raw_text, "I'm not sure what to search. Please say the search query.")
+                return ParsedIntent(
+                    intent_type=IntentType.BROWSER,
+                    raw_text=raw_text,
+                    entities={"engine": "youtube", "query": mid},
+                )
+
+            idx = tokens.index("search") if "search" in tokens else 0
             rest = tokens[idx + 1 :]
             if rest and rest[0] == "for":
                 rest = rest[1:]
@@ -320,14 +367,24 @@ class IntentParser:
                 rest = rest[1:]
 
             query = " ".join(rest).strip()
-            if query:
-                return ParsedIntent(
-                    intent_type=IntentType.BROWSER,
-                    raw_text=raw_text,
-                    entities={"engine": engine, "query": query},
-                )
+
+            if query in _REF_WORDS:
+                query = _ctx_str(ctx, "last_search_query")
+
+            if not query:
+                return _clarify(raw_text, "I'm not sure what to search. Please say the search query.")
+
+            # Follow-up: if user recently opened YouTube, default searches to YouTube.
+            if engine == "google":
+                last_site = _ctx_str(ctx, "last_browser_site")
+                last_eng = _ctx_str(ctx, "last_search_engine")
+                if last_site == "youtube" or last_eng == "youtube":
+                    engine = "youtube"
+
+            return ParsedIntent(
+                intent_type=IntentType.BROWSER,
+                raw_text=raw_text,
+                entities={"engine": engine, "query": query},
+            )
 
         return ParsedIntent(intent_type=IntentType.UNKNOWN, raw_text=raw_text)
-
-
-

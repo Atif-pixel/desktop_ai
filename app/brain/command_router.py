@@ -126,6 +126,16 @@ class CommandRouter:
                 data={"builtin": "help"},
             )
 
+        if builtin == "clarify":
+            msg = entities.get("message")
+            message = msg if isinstance(msg, str) and msg.strip() else "Please repeat your command."
+            return CommandResult(
+                ok=False,
+                executed=False,
+                message=message,
+                data={"builtin": "clarify"},
+            )
+
         if builtin == "greet":
             return CommandResult(
                 ok=True,
