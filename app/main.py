@@ -2,11 +2,6 @@
 
 Text-mode remains the primary dev harness.
 
-Step 3A added an optional, controlled one-shot voice input trigger.
-Step 3B improves voice-mode usability/diagnostics while keeping the same pipeline.
-Step 4 adds optional text-to-speech (TTS) output.
-Step 5A adds an optional hotkey trigger for one-shot voice input.
-
 Important:
 - No gesture runtime
 - No wakeword
@@ -46,6 +41,10 @@ def _is_voice_command(text: str) -> bool:
     return _normalized(text) in _VOICE_COMMANDS
 
 
+def _status(tag: str, message: str) -> None:
+    print(f"[{tag}] {message}")
+
+
 def _format_voice_diagnostics(d: dict) -> str:
     device_name = d.get("device_name")
     device_index = d.get("device_index")
@@ -77,35 +76,81 @@ def _format_voice_diagnostics(d: dict) -> str:
     return " | ".join(parts)
 
 
-def _print_and_speak(runtime: AssistantRuntime, response) -> None:
-    print(response.text)
+def _is_help_response(response) -> bool:
+    result = getattr(response, "result", None)
+    data = getattr(result, "data", None) if result is not None else None
+    return isinstance(data, dict) and data.get("builtin") == "help"
+
+
+def _is_section_help_response(response) -> bool:
+    result = getattr(response, "result", None)
+    data = getattr(result, "data", None) if result is not None else None
+    return _is_help_response(response) and isinstance(data, dict) and bool(data.get("section"))
+
+
+def _is_clarify_response(response) -> bool:
+    result = getattr(response, "result", None)
+    data = getattr(result, "data", None) if result is not None else None
+    return isinstance(data, dict) and data.get("builtin") == "clarify"
+
+
+def _print_response(response) -> None:
+    text = (getattr(response, "text", "") or "").rstrip()
+
+    # Preserve help formatting (multi-line blocks) exactly.
+    if _is_help_response(response) or "\n" in text:
+        print(text)
+        return
+
+    if _is_clarify_response(response):
+        _status("clarify", text)
+        return
+
+    _status("assistant", text)
+
+
+def _print_and_speak(runtime: AssistantRuntime, response, *, show_speaking_status: bool) -> None:
+    _print_response(response)
+
+    if runtime.settings.tts_enabled and show_speaking_status:
+        _status("tts", "Speaking...")
+
     runtime.speak_response(response)
 
 
-def _run_one_shot_voice(runtime: AssistantRuntime, *, source: str, lock: threading.Lock) -> None:
+def _run_one_shot_voice(
+    runtime: AssistantRuntime,
+    *,
+    source: str,
+    lock: threading.Lock,
+) -> None:
     # Avoid overlapping voice capture if both typed command + hotkey are used.
     if not lock.acquire(blocking=False):
-        print("Already listening...")
+        _status("voice", "Already listening...")
         return
 
     try:
         max_s = runtime.settings.voice_max_seconds
-        print(f"\nListening... (one-shot, up to {max_s:.0f}s) [{source}]")
+        _status("voice", f"Listening (one-shot, up to {max_s:.0f}s) [{source}]")
 
         listen = runtime.listen_once()
+
         diag_line = _format_voice_diagnostics(listen.diagnostics)
-        if diag_line:
-            print(diag_line)
+        if diag_line and (runtime.settings.voice_show_diagnostics or not listen.ok):
+            _status("diag", diag_line)
 
         if not listen.ok or not listen.transcript:
-            print(listen.error or "Voice input failed.")
+            _status("error", listen.error or "Voice input failed.")
             return
 
-        # Requirement: print transcript before processing it.
-        print(f"Heard: {listen.transcript.text}")
+        # Requirement: show transcript before processing it.
+        _status("heard", listen.transcript.text)
 
+        _status("assistant", "Processing...")
         response = runtime.process_text(listen.transcript.text)
-        _print_and_speak(runtime, response)
+        _print_and_speak(runtime, response, show_speaking_status=True)
+
+        _status("idle", "Ready.")
     finally:
         lock.release()
 
@@ -113,9 +158,8 @@ def _run_one_shot_voice(runtime: AssistantRuntime, *, source: str, lock: threadi
 def run_text_loop(runtime: AssistantRuntime, *, prompt: str = "> ") -> int:
     """Run a blocking terminal loop."""
 
-    print("Desktop Control AI (text mode)")
-    print("Type 'help' for commands.")
-    print("Type 'voice' to speak once. Type 'text' to confirm text mode. Type 'exit' to quit.")
+    print("Desktop Control AI")
+    _status("idle", "Ready. Type 'help' for commands. Type 'voice' to speak once. Type 'exit' to quit.")
 
     voice_lock = threading.Lock()
 
@@ -124,7 +168,6 @@ def run_text_loop(runtime: AssistantRuntime, *, prompt: str = "> ") -> int:
         combo = getattr(runtime.settings, "hotkey_combo", "shift+v")
 
         def on_hotkey() -> None:
-            # Keep callback light; do work in a separate thread.
             threading.Thread(
                 target=_run_one_shot_voice,
                 kwargs={"runtime": runtime, "source": f"hotkey:{combo}", "lock": voice_lock},
@@ -134,9 +177,9 @@ def run_text_loop(runtime: AssistantRuntime, *, prompt: str = "> ") -> int:
         hotkey_listener = HotkeyListener(combo, on_hotkey)
         status = hotkey_listener.start()
         if status.ok:
-            print(f"Hotkey: press {combo} to speak once.")
+            _status("hotkey", f"Press {combo} to speak once.")
         else:
-            print(f"Hotkey unavailable ({combo}): {status.error}")
+            _status("hotkey", f"Unavailable ({combo}): {status.error}")
             hotkey_listener = None
 
     try:
@@ -154,7 +197,7 @@ def run_text_loop(runtime: AssistantRuntime, *, prompt: str = "> ") -> int:
                 break
 
             if _is_text_command(user_text):
-                print("Already in text mode.")
+                _status("idle", "Already in text mode.")
                 continue
 
             if _is_voice_command(user_text):
@@ -162,13 +205,13 @@ def run_text_loop(runtime: AssistantRuntime, *, prompt: str = "> ") -> int:
                 continue
 
             response = runtime.process_text(user_text)
-            _print_and_speak(runtime, response)
+            _print_and_speak(runtime, response, show_speaking_status=False)
 
     finally:
         if hotkey_listener is not None:
             hotkey_listener.stop()
 
-    print("Goodbye.")
+    _status("idle", "Goodbye.")
     return 0
 
 
@@ -182,6 +225,3 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
-

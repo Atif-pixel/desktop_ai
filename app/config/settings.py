@@ -31,6 +31,9 @@ class Settings:
     voice_device_index: Optional[int] = None
     voice_trailing_silence_seconds: float = 0.6
 
+    # Voice UX (terminal): keep normal output clean.
+    voice_show_diagnostics: bool = False
+
     # Text-to-speech output (Step 4).
     tts_enabled: bool = True
     tts_rate: int = 0
@@ -39,4 +42,3 @@ class Settings:
     # Requires the optional `keyboard` dependency.
     hotkey_enabled: bool = True
     hotkey_combo: str = "shift+v"
-
