@@ -10,6 +10,7 @@ from __future__ import annotations
 import sys
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Dict, Optional
 
 from app.brain.orchestrator import Orchestrator
@@ -34,6 +35,83 @@ from app.input.voice.speech_to_text import (
 from app.output.text_to_speech import TextToSpeech, TextToSpeechConfig, default_text_to_speech
 
 
+
+class RuntimeIntent(str, Enum):
+    """Fixed runtime intents for command-mode handling."""
+
+    OPEN_CHROME = "OPEN_CHROME"
+    OPEN_YOUTUBE = "OPEN_YOUTUBE"
+    SEARCH_GOOGLE = "SEARCH_GOOGLE"
+    PLAY_MUSIC = "PLAY_MUSIC"
+    EXIT = "EXIT"
+    UNKNOWN = "UNKNOWN"
+
+
+def _normalize_command(command: str) -> str:
+    return " ".join((command or "").strip().lower().split())
+
+
+def _extract_google_query(command: str) -> str:
+    """Extract a Google search query from a user command (best-effort)."""
+
+    text = _normalize_command(command)
+    if not text:
+        return ""
+
+    prefixes = (
+        "search google ",
+        "search for ",
+        "search ",
+        "google ",
+        "find ",
+        "look up ",
+        "lookup ",
+    )
+
+    for p in prefixes:
+        if text.startswith(p):
+            q = text[len(p) :].strip()
+            # Trim common trailing filler.
+            q = q.removesuffix(" on google").strip() if hasattr(q, "removesuffix") else q
+            return q
+
+    # e.g. "look up python" (no space variant)
+    if text.startswith("lookup") and len(text) > len("lookup"):
+        return text[len("lookup") :].strip()
+
+    return ""
+
+
+def detect_intent(command: str) -> RuntimeIntent:
+    """Detect a fixed runtime intent from free-form text."""
+
+    text = _normalize_command(command)
+    if not text:
+        return RuntimeIntent.UNKNOWN
+
+    # Exit intent
+    if text in {"exit", "quit", "stop", "stop jarvis"}:
+        return RuntimeIntent.EXIT
+
+    # Search intent
+    if text.startswith(("search ", "google ", "find ", "look up ", "lookup ")):
+        return RuntimeIntent.SEARCH_GOOGLE
+
+    # YouTube
+    if "youtube" in text:
+        if any(w in text for w in ("open", "watch", "launch")) or text == "youtube":
+            return RuntimeIntent.OPEN_YOUTUBE
+
+    # Chrome / browser
+    if "chrome" in text or "browser" in text:
+        if any(w in text for w in ("open", "launch")) or text in {"chrome", "browser"}:
+            return RuntimeIntent.OPEN_CHROME
+
+    # Music
+    if any(w in text for w in ("music", "song", "play music")):
+        return RuntimeIntent.PLAY_MUSIC
+
+    return RuntimeIntent.UNKNOWN
 @dataclass(frozen=True)
 class VoiceListenResult:
     """Result of one-shot voice capture + transcription."""
@@ -91,9 +169,33 @@ class AssistantRuntime:
         return response
 
     def process_command(self, command: str) -> AssistantResponse:
-        """Alias used by command mode."""
+        """Process a command using fixed runtime intents.
 
-        return self.process_text(command)
+        This keeps detection logic separate from execution logic.
+        """
+
+        intent = detect_intent(command)
+
+        if intent == RuntimeIntent.OPEN_CHROME:
+            return self.process_text("open chrome")
+
+        if intent == RuntimeIntent.OPEN_YOUTUBE:
+            return self.process_text("open youtube")
+
+        if intent == RuntimeIntent.SEARCH_GOOGLE:
+            query = _extract_google_query(command)
+            if not query:
+                return AssistantResponse(text="What should I search for?")
+            return self.process_text(f"search google {query}")
+
+        if intent == RuntimeIntent.PLAY_MUSIC:
+            # Safe starter behavior: open YouTube search for "music".
+            return self.process_text("search youtube music")
+
+        if intent == RuntimeIntent.EXIT:
+            return AssistantResponse(text="Goodbye.")
+
+        return AssistantResponse(text="Sorry, I didn't understand that.")
 
     def _update_session_state(self, response: AssistantResponse) -> None:
         md = response.metadata if isinstance(response.metadata, dict) else {}
@@ -209,8 +311,9 @@ class AssistantRuntime:
 
             print(f"Command: {command}")
 
-            normalized = " ".join(command.lower().split())
-            if normalized in {"exit", "quit", "stop", "stop jarvis"}:
+            intent = detect_intent(command)
+            if intent == RuntimeIntent.EXIT:
+                self.speak_text("Goodbye.")
                 break
 
             try:
@@ -272,3 +375,4 @@ class AssistantRuntime:
         metadata["transcript"] = listen.transcript.text
         metadata["stt_confidence"] = listen.transcript.confidence
         return AssistantResponse(text=response.text, result=response.result, metadata=metadata)
+
