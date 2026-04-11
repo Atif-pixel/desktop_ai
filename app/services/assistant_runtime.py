@@ -1,4 +1,4 @@
-﻿"""Assistant runtime service.
+"""Assistant runtime service.
 
 Step 7: adds a small in-memory session context layer to support safe follow-ups.
 
@@ -161,6 +161,19 @@ class AssistantRuntime:
             )
 
         return self.speak_text(response.text)
+    def greet_user(self) -> None:
+        """Speak a short greeting with the current local time.
+
+        Intended for wake-word triggers only (tray mode).
+        """
+
+        from datetime import datetime
+
+        now = datetime.now()
+        time_str = now.strftime("%I:%M %p").lstrip("0")
+        greeting = f"Hey sir, current time is {time_str}"
+        self.speak_response(AssistantResponse(text=greeting))
+
 
     def listen_once(self) -> VoiceListenResult:
         """Capture and transcribe one utterance (no assistant processing)."""
@@ -215,3 +228,5 @@ class AssistantRuntime:
         metadata["transcript"] = listen.transcript.text
         metadata["stt_confidence"] = listen.transcript.confidence
         return AssistantResponse(text=response.text, result=response.result, metadata=metadata)
+
+

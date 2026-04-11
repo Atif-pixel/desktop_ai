@@ -1,6 +1,10 @@
-﻿"""Canonical app entrypoint.
+"""Canonical app entrypoint.
 
 Text-mode remains the primary dev harness.
+
+Optional modes:
+- `--tray`: run as a system tray app (no interactive CLI)
+- `--background`: start tray mode in the background (Windows best-effort)
 
 Important:
 - No gesture runtime
@@ -13,6 +17,10 @@ Run:
 
 from __future__ import annotations
 
+import argparse
+import os
+import subprocess
+import sys
 import threading
 from typing import Iterable, Optional
 
@@ -215,11 +223,78 @@ def run_text_loop(runtime: AssistantRuntime, *, prompt: str = "> ") -> int:
     return 0
 
 
+def _build_arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="desktop-control-ai", add_help=True)
+    p.add_argument(
+        "--tray",
+        action="store_true",
+        help="Run as a system tray app (no interactive CLI).",
+    )
+    p.add_argument(
+        "--background",
+        action="store_true",
+        help="Start tray mode in the background (Windows) and exit this process.",
+    )
+    return p
+
+
+def _find_pythonw() -> Optional[str]:
+    exe = sys.executable or ""
+    exe_dir = os.path.dirname(exe)
+    candidate = os.path.join(exe_dir, "pythonw.exe")
+    return candidate if os.path.isfile(candidate) else None
+
+
+def _start_tray_in_background() -> bool:
+    """Start tray mode in a detached process (best-effort, Windows-friendly)."""
+
+    try:
+        exe = _find_pythonw() or sys.executable
+        if not exe:
+            return False
+
+        args = [exe, "-m", "app.main", "--tray"]
+
+        creationflags = 0
+        if sys.platform.startswith("win"):
+            creationflags |= getattr(subprocess, "DETACHED_PROCESS", 0)
+            creationflags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            creationflags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+        subprocess.Popen(
+            args,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creationflags,
+        )
+        return True
+    except Exception:
+        return False
+
+
 def main(argv: Optional[Iterable[str]] = None) -> int:
     """Program entrypoint."""
 
-    _ = argv
+    parser = _build_arg_parser()
+    ns = parser.parse_args(list(argv) if argv is not None else None)
+
+    if ns.background:
+        ok = _start_tray_in_background()
+        if ok:
+            _status("tray", "Started in background.")
+            return 0
+
+        _status("tray", "Failed to start in background. Try `python -m app.main --tray`.")
+        return 1
+
     runtime = AssistantRuntime()
+
+    if ns.tray:
+        from app.services.tray_app import TrayApp
+
+        return TrayApp(runtime).run()
+
     return run_text_loop(runtime)
 
 

@@ -1,9 +1,10 @@
-﻿"""Settings model.
+"""Settings model.
 
 Step 3B adds a small set of voice tuning values for one-shot microphone input.
 Step 3D adds a trailing-silence setting to reduce perceived delay.
 Step 4 adds basic TTS output settings.
 Step 5A adds an optional hotkey trigger configuration.
+Step 10 adds an optional lightweight wake word trigger (tray mode only).
 
 Loading from env/files is still deferred.
 """
@@ -11,7 +12,7 @@ Loading from env/files is still deferred.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 from .constants import DEFAULT_LANGUAGE, DEFAULT_WAKEWORD
 
@@ -42,3 +43,8 @@ class Settings:
     # Requires the optional `keyboard` dependency.
     hotkey_enabled: bool = True
     hotkey_combo: str = "shift+v"
+
+    # Wake word trigger (Step 10).
+    # Designed to be enabled only in tray/background mode.
+    wake_word_enabled: bool = False
+    wake_word_phrases: Tuple[str, ...] = ("hey jarvis", "jarvis")
