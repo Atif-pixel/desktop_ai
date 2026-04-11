@@ -1,4 +1,4 @@
-"""Settings model.
+﻿"""Settings model.
 
 Step 3B adds a small set of voice tuning values for one-shot microphone input.
 Step 3D adds a trailing-silence setting to reduce perceived delay.
@@ -46,5 +46,5 @@ class Settings:
 
     # Wake word trigger (Step 10).
     # Designed to be enabled only in tray/background mode.
-    wake_word_enabled: bool = False
+    wake_word_enabled: bool = True
     wake_word_phrases: Tuple[str, ...] = ("hey jarvis", "jarvis")
