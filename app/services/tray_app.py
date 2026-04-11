@@ -45,13 +45,18 @@ class TrayApp:
             self._start_listen_thread(icon, source="tray")
 
         def on_exit(icon, item) -> None:  # noqa: ARG001
+            print("Tray exit triggered")
             try:
+                # Stop runtime first so background loops can exit naturally.
+                self._runtime.stop()
+
                 if self._wake is not None:
                     self._wake.stop()
                 if self._hotkey is not None:
                     self._hotkey.stop()
             finally:
                 icon.stop()
+
 
         menu = pystray.Menu(
             pystray.MenuItem("Listen once", on_listen),
@@ -103,6 +108,7 @@ class TrayApp:
 
             st = self._wake.start()
             if st.ok:
+                self._runtime.wake_listener = self._wake
                 print("Wake listener started")
             else:
                 self._wake = None
@@ -151,6 +157,7 @@ class TrayApp:
             self._wake = None
             if wake is not None:
                 wake.stop()
+            self._runtime.wake_listener = None
 
             # Requirement: greet only on wake word.
             self._runtime.greet_user()

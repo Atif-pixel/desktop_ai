@@ -3,6 +3,10 @@
 Step 7: adds a small in-memory session context layer to support safe follow-ups.
 
 Wake word + command mode are coordinated by tray runtime (not by the CLI loop).
+
+Note:
+- Command mode routes all commands through the brain pipeline (orchestrator -> intent parser -> router -> actions).
+- Exit handling for command mode is handled locally in the command-mode loop.
 """
 
 from __future__ import annotations
@@ -10,7 +14,6 @@ from __future__ import annotations
 import sys
 
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Any, Dict, Optional
 
 from app.brain.orchestrator import Orchestrator
@@ -35,83 +38,6 @@ from app.input.voice.speech_to_text import (
 from app.output.text_to_speech import TextToSpeech, TextToSpeechConfig, default_text_to_speech
 
 
-
-class RuntimeIntent(str, Enum):
-    """Fixed runtime intents for command-mode handling."""
-
-    OPEN_CHROME = "OPEN_CHROME"
-    OPEN_YOUTUBE = "OPEN_YOUTUBE"
-    SEARCH_GOOGLE = "SEARCH_GOOGLE"
-    PLAY_MUSIC = "PLAY_MUSIC"
-    EXIT = "EXIT"
-    UNKNOWN = "UNKNOWN"
-
-
-def _normalize_command(command: str) -> str:
-    return " ".join((command or "").strip().lower().split())
-
-
-def _extract_google_query(command: str) -> str:
-    """Extract a Google search query from a user command (best-effort)."""
-
-    text = _normalize_command(command)
-    if not text:
-        return ""
-
-    prefixes = (
-        "search google ",
-        "search for ",
-        "search ",
-        "google ",
-        "find ",
-        "look up ",
-        "lookup ",
-    )
-
-    for p in prefixes:
-        if text.startswith(p):
-            q = text[len(p) :].strip()
-            # Trim common trailing filler.
-            q = q.removesuffix(" on google").strip() if hasattr(q, "removesuffix") else q
-            return q
-
-    # e.g. "look up python" (no space variant)
-    if text.startswith("lookup") and len(text) > len("lookup"):
-        return text[len("lookup") :].strip()
-
-    return ""
-
-
-def detect_intent(command: str) -> RuntimeIntent:
-    """Detect a fixed runtime intent from free-form text."""
-
-    text = _normalize_command(command)
-    if not text:
-        return RuntimeIntent.UNKNOWN
-
-    # Exit intent
-    if text in {"exit", "quit", "stop", "stop jarvis"}:
-        return RuntimeIntent.EXIT
-
-    # Search intent
-    if text.startswith(("search ", "google ", "find ", "look up ", "lookup ")):
-        return RuntimeIntent.SEARCH_GOOGLE
-
-    # YouTube
-    if "youtube" in text:
-        if any(w in text for w in ("open", "watch", "launch")) or text == "youtube":
-            return RuntimeIntent.OPEN_YOUTUBE
-
-    # Chrome / browser
-    if "chrome" in text or "browser" in text:
-        if any(w in text for w in ("open", "launch")) or text in {"chrome", "browser"}:
-            return RuntimeIntent.OPEN_CHROME
-
-    # Music
-    if any(w in text for w in ("music", "song", "play music")):
-        return RuntimeIntent.PLAY_MUSIC
-
-    return RuntimeIntent.UNKNOWN
 @dataclass(frozen=True)
 class VoiceListenResult:
     """Result of one-shot voice capture + transcription."""
@@ -142,6 +68,9 @@ class AssistantRuntime:
         # One-time wake activation flag (tray mode coordinates behavior).
         self.wake_mode = True
 
+        self.running = False
+        self.wake_listener = None
+
         self._microphone = microphone or SoundDeviceMicrophone(
             sample_rate_hz=self.settings.voice_sample_rate_hz,
             channels=self.settings.voice_channels,
@@ -169,33 +98,9 @@ class AssistantRuntime:
         return response
 
     def process_command(self, command: str) -> AssistantResponse:
-        """Process a command using fixed runtime intents.
+        """Process a command using the normal brain pipeline."""
 
-        This keeps detection logic separate from execution logic.
-        """
-
-        intent = detect_intent(command)
-
-        if intent == RuntimeIntent.OPEN_CHROME:
-            return self.process_text("open chrome")
-
-        if intent == RuntimeIntent.OPEN_YOUTUBE:
-            return self.process_text("open youtube")
-
-        if intent == RuntimeIntent.SEARCH_GOOGLE:
-            query = _extract_google_query(command)
-            if not query:
-                return AssistantResponse(text="What should I search for?")
-            return self.process_text(f"search google {query}")
-
-        if intent == RuntimeIntent.PLAY_MUSIC:
-            # Safe starter behavior: open YouTube search for "music".
-            return self.process_text("search youtube music")
-
-        if intent == RuntimeIntent.EXIT:
-            return AssistantResponse(text="Goodbye.")
-
-        return AssistantResponse(text="Sorry, I didn't understand that.")
+        return self.process_text(command)
 
     def _update_session_state(self, response: AssistantResponse) -> None:
         md = response.metadata if isinstance(response.metadata, dict) else {}
@@ -284,43 +189,55 @@ class AssistantRuntime:
         time_str = now.strftime("%I:%M %p").lstrip("0")
         greeting = f"Hey sir, current time is {time_str}"
         self.speak_response(AssistantResponse(text=greeting))
-
     def run_continuous_listener(self) -> None:
         """Command mode: keep listening without wake word.
 
-        Uses repeated one-shot listens (no continuous audio transcription) until an exit keyword is heard.
+        Uses repeated one-shot listens until the runtime is stopped or an exit keyword is heard.
         """
 
-        print("Command mode: listening for commands. Say 'exit' or 'stop jarvis' to stop.")
+        self.running = True
+        print("Assistant loop started")
 
-        while True:
-            try:
+        exit_phrases = {"exit", "quit", "stop", "stop jarvis"}
+
+        try:
+            while self.running:
                 listen = self.listen_once()
-            except Exception as exc:
-                print(f"Continuous listener error: {exc}")
-                continue
 
-            if not listen.ok or not listen.transcript:
-                if listen.error:
-                    print(f"Voice error: {listen.error}")
-                continue
+                if not listen.ok or not listen.transcript:
+                    if listen.error:
+                        print(f"Voice error: {listen.error}")
+                    continue
 
-            command = (listen.transcript.text or "").strip()
-            if not command:
-                continue
+                command = (listen.transcript.text or "").strip()
+                if not command:
+                    continue
 
-            print(f"Command: {command}")
+                print(f"Command: {command}")
 
-            intent = detect_intent(command)
-            if intent == RuntimeIntent.EXIT:
-                self.speak_text("Goodbye.")
-                break
+                cmd = " ".join(command.lower().split())
+                if cmd in exit_phrases:
+                    self.speak_text("Goodbye.")
+                    self.stop()
+                    break
 
+                response = self.process_text(command)
+                if response is not None:
+                    self.speak_response(response)
+        finally:
+            print("Assistant loop stopped")
+
+    def stop(self) -> None:
+        print("Stopping assistant runtime...")
+        self.running = False
+
+        if hasattr(self, "wake_listener") and self.wake_listener:
+            print("Stopping wake listener...")
             try:
-                response = self.process_command(command)
-                self.speak_response(response)
+                self.wake_listener.stop()
             except Exception as exc:
-                print(f"Command processing error: {exc}")
+                print(f"Wake listener stop error: {exc}")
+
 
     def listen_once(self) -> VoiceListenResult:
         """Capture and transcribe one utterance (no assistant processing)."""
@@ -375,4 +292,3 @@ class AssistantRuntime:
         metadata["transcript"] = listen.transcript.text
         metadata["stt_confidence"] = listen.transcript.confidence
         return AssistantResponse(text=response.text, result=response.result, metadata=metadata)
-
