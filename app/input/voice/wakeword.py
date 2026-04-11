@@ -143,7 +143,7 @@ class WakeWordListener:
             self._stop.set()
             t = self._thread
 
-        if t is not None and t.is_alive():
+        if t is not None and t.is_alive() and threading.current_thread() is not t:
             t.join(timeout=1.5)
 
         with self._lock:
@@ -286,3 +286,4 @@ class WakeWordListener:
         except Exception as exc:
             print(f"Wake listener crashed: {exc}")
             return
+

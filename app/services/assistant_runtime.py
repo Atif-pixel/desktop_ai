@@ -2,7 +2,7 @@
 
 Step 7: adds a small in-memory session context layer to support safe follow-ups.
 
-This does NOT add wakeword support or continuous listening.
+Wake word + command mode are coordinated by tray runtime (not by the CLI loop).
 """
 
 from __future__ import annotations
@@ -61,6 +61,9 @@ class AssistantRuntime:
         self.state = AssistantState()
         self._log = get_logger(__name__)
 
+        # One-time wake activation flag (tray mode coordinates behavior).
+        self.wake_mode = True
+
         self._microphone = microphone or SoundDeviceMicrophone(
             sample_rate_hz=self.settings.voice_sample_rate_hz,
             channels=self.settings.voice_channels,
@@ -86,6 +89,11 @@ class AssistantRuntime:
         response = self._orchestrator.handle(request)
         self._update_session_state(response)
         return response
+
+    def process_command(self, command: str) -> AssistantResponse:
+        """Alias used by command mode."""
+
+        return self.process_text(command)
 
     def _update_session_state(self, response: AssistantResponse) -> None:
         md = response.metadata if isinstance(response.metadata, dict) else {}
@@ -161,6 +169,7 @@ class AssistantRuntime:
             )
 
         return self.speak_text(response.text)
+
     def greet_user(self) -> None:
         """Speak a short greeting with the current local time.
 
@@ -174,6 +183,41 @@ class AssistantRuntime:
         greeting = f"Hey sir, current time is {time_str}"
         self.speak_response(AssistantResponse(text=greeting))
 
+    def run_continuous_listener(self) -> None:
+        """Command mode: keep listening without wake word.
+
+        Uses repeated one-shot listens (no continuous audio transcription) until an exit keyword is heard.
+        """
+
+        print("Command mode: listening for commands. Say 'exit' or 'stop jarvis' to stop.")
+
+        while True:
+            try:
+                listen = self.listen_once()
+            except Exception as exc:
+                print(f"Continuous listener error: {exc}")
+                continue
+
+            if not listen.ok or not listen.transcript:
+                if listen.error:
+                    print(f"Voice error: {listen.error}")
+                continue
+
+            command = (listen.transcript.text or "").strip()
+            if not command:
+                continue
+
+            print(f"Command: {command}")
+
+            normalized = " ".join(command.lower().split())
+            if normalized in {"exit", "quit", "stop", "stop jarvis"}:
+                break
+
+            try:
+                response = self.process_command(command)
+                self.speak_response(response)
+            except Exception as exc:
+                print(f"Command processing error: {exc}")
 
     def listen_once(self) -> VoiceListenResult:
         """Capture and transcribe one utterance (no assistant processing)."""
@@ -228,5 +272,3 @@ class AssistantRuntime:
         metadata["transcript"] = listen.transcript.text
         metadata["stt_confidence"] = listen.transcript.confidence
         return AssistantResponse(text=response.text, result=response.result, metadata=metadata)
-
-

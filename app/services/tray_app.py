@@ -6,7 +6,7 @@ Tray mode:
 - reuses the existing one-shot voice pipeline and TTS
 - preserves hotkey support (if enabled)
 
-Step 10 adds an optional lightweight wake word trigger for tray mode.
+Wake word (Step 10): optional, tray-only.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ class TrayApp:
         self._lock = threading.Lock()
         self._hotkey: Optional[HotkeyListener] = None
         self._wake: Optional[WakeWordListener] = None
+        self._command_thread: Optional[threading.Thread] = None
 
     def run(self) -> int:
         """Run the tray icon loop (blocking)."""
@@ -81,14 +82,21 @@ class TrayApp:
         print(f"wake_word_enabled={wake_enabled} phrases={phrases}")
 
         if wake_enabled:
+            # Requirement: wake listener uses 16000Hz.
+            sample_rate_hz = 16000
+            cfg_sr = getattr(self._runtime.settings, "voice_sample_rate_hz", 16000)
+            if int(cfg_sr) != 16000:
+                print(f"Wake listener forcing sample_rate_hz=16000 (settings voice_sample_rate_hz={cfg_sr})")
+
             def on_wake(keyword: str) -> None:
+                # Called from the wake listener thread. Keep it lightweight.
                 print(f"Wake word detected: {keyword}")
-                self._start_listen_thread(icon, source="wakeword")
+                self._start_command_mode_thread(icon, keyword=keyword)
 
             self._wake = WakeWordListener(
                 phrases=phrases,
                 on_wake=on_wake,
-                sample_rate_hz=getattr(self._runtime.settings, "voice_sample_rate_hz", 16000),
+                sample_rate_hz=sample_rate_hz,
                 device_index=getattr(self._runtime.settings, "voice_device_index", None),
                 channels=getattr(self._runtime.settings, "voice_channels", 1),
             )
@@ -109,6 +117,56 @@ class TrayApp:
     def _start_listen_thread(self, icon, *, source: str) -> None:
         threading.Thread(target=self._listen_once, args=(icon, source), daemon=True).start()
 
+    def _start_command_mode_thread(self, icon, *, keyword: str) -> None:
+        # One-time wake activation.
+        if not getattr(self._runtime, "wake_mode", True):
+            return
+
+        if self._command_thread is not None and self._command_thread.is_alive():
+            return
+
+        self._command_thread = threading.Thread(
+            target=self._enter_command_mode,
+            args=(icon, keyword),
+            daemon=True,
+        )
+        self._command_thread.start()
+
+    def _enter_command_mode(self, icon, keyword: str) -> None:
+        _ = keyword
+
+        if not getattr(self._runtime, "wake_mode", True):
+            return
+
+        # Hold the same lock used by one-shot voice so command mode is exclusive.
+        if not self._lock.acquire(blocking=False):
+            print("Wake->command mode switch blocked: already listening")
+            return
+
+        try:
+            self._runtime.wake_mode = False
+
+            # Requirement: wake listener NEVER restarts after switching to command mode.
+            wake = self._wake
+            self._wake = None
+            if wake is not None:
+                wake.stop()
+
+            # Requirement: greet only on wake word.
+            self._runtime.greet_user()
+
+            print("Switched to command mode")
+            try:
+                icon.notify("Command mode active", title="Desktop Control AI")
+            except Exception:
+                pass
+
+            self._runtime.run_continuous_listener()
+        except Exception as exc:
+            print(f"Command mode crashed: {exc}")
+        finally:
+            self._lock.release()
+
     def _listen_once(self, icon, source: str) -> None:
         if not self._lock.acquire(blocking=False):
             try:
@@ -124,10 +182,6 @@ class TrayApp:
             # Avoid audio device contention: pause wake listening while recording the command.
             if wake is not None and wake.is_running():
                 wake.stop()
-
-            if source == "wakeword":
-                # Requirement: greet only for wake-word triggers (not hotkey/tray).
-                self._runtime.greet_user()
 
             try:
                 icon.notify(f"Listening... ({source})", title="Desktop Control AI")
@@ -155,8 +209,13 @@ class TrayApp:
         finally:
             self._lock.release()
 
-            # Resume wake word listener if configured.
-            if wake_enabled and wake is not None and not wake.is_running():
+            # Resume wake word listener only if still in wake mode.
+            if (
+                wake_enabled
+                and getattr(self._runtime, "wake_mode", True)
+                and wake is not None
+                and not wake.is_running()
+            ):
                 wake.start()
 
     @staticmethod
