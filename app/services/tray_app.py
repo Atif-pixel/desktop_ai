@@ -83,7 +83,7 @@ class TrayApp:
 
         # Wake word trigger (tray mode only, opt-in).
         wake_enabled = bool(getattr(self._runtime.settings, "wake_word_enabled", False))
-        phrases = getattr(self._runtime.settings, "wake_word_phrases", ("hey jarvis", "jarvis"))
+        phrases = getattr(self._runtime.settings, "wake_word_phrases", ("wake up buddy daddy's home", "jarvis"))
         print(f"wake_word_enabled={wake_enabled} phrases={phrases}")
 
         if wake_enabled:

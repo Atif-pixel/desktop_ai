@@ -187,7 +187,7 @@ class AssistantRuntime:
 
         now = datetime.now()
         time_str = now.strftime("%I:%M %p").lstrip("0")
-        greeting = f"Hey sir, current time is {time_str}"
+        greeting = f"Hey sir, how are you! current time is {time_str}"
         self.speak_response(AssistantResponse(text=greeting))
     def run_continuous_listener(self) -> None:
         """Command mode: keep listening without wake word.
