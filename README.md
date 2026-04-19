@@ -2,6 +2,10 @@
 
 Voice-first desktop assistant foundation for Windows.
 
+# to start the environment
+
+(Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned) ; (& e:\desktop-control-ai\venv\Scripts\Activate.ps1)
+
 ## Purpose
 Build a production-grade assistant that can control the desktop using voice (primary) and later gestures (secondary).
 

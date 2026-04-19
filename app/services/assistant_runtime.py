@@ -83,6 +83,9 @@ class AssistantRuntime:
         tts_cfg = TextToSpeechConfig(enabled=self.settings.tts_enabled, rate=self.settings.tts_rate)
         self._text_to_speech = text_to_speech or default_text_to_speech(tts_cfg)
 
+        self.is_speaking = False
+        self._speech_thread = None
+
     def process_text(self, text: str) -> AssistantResponse:
         """Process already-transcribed text."""
 
@@ -149,13 +152,31 @@ class AssistantRuntime:
     def speak_text(self, text: str) -> None:
         """Speak text using the configured TTS backend (failure-safe)."""
 
-        try:
-            self._text_to_speech.speak(text)
-        except Exception as exc:  # pragma: no cover
-            msg = self._one_line_error(exc)
-            print(f"TTS failed: {msg}", file=sys.stderr)
-            self._log.debug("TTS failed: %s", msg)
-            return None
+        def _speak() -> None:
+            try:
+                self.is_speaking = True
+                self._text_to_speech.speak(text)
+            except Exception as exc:  # pragma: no cover
+                msg = self._one_line_error(exc)
+                print(f"TTS failed: {msg}", file=sys.stderr)
+                self._log.debug("TTS failed: %s", msg)
+            finally:
+                self.is_speaking = False
+
+        import threading
+
+        self._speech_thread = threading.Thread(target=_speak, daemon=True)
+        self._speech_thread.start()
+
+    def stop_speaking(self) -> None:
+        if getattr(self, "is_speaking", False):
+            print("Interrupting speech...")
+            try:
+                if hasattr(self._text_to_speech, "stop"):
+                    self._text_to_speech.stop()
+            except Exception as e:
+                print("Error stopping TTS:", e)
+            self.is_speaking = False
 
     def speak_response(self, response: AssistantResponse) -> None:
         """Speak an assistant response (failure-safe).
@@ -189,7 +210,7 @@ class AssistantRuntime:
         time_str = now.strftime("%I:%M %p").lstrip("0")
         greeting = f"Hey sir, how are you! current time is {time_str}"
         self.speak_response(AssistantResponse(text=greeting))
-    def run_continuous_listener(self) -> None:
+    def run_continuous_listener(self, on_exit_callback: Optional[Callable[[], None]] = None) -> None:
         """Command mode: keep listening without wake word.
 
         Uses repeated one-shot listens until the runtime is stopped or an exit keyword is heard.
@@ -213,9 +234,15 @@ class AssistantRuntime:
                 if not command:
                     continue
 
+                cmd = " ".join(command.lower().split())
+
+                if getattr(self, "is_speaking", False):
+                    self.stop_speaking()
+                    if cmd in {"stop", "stop jarvis"}:
+                        continue
+
                 print(f"Command: {command}")
 
-                cmd = " ".join(command.lower().split())
                 if cmd in exit_phrases:
                     self.speak_text("Goodbye.")
                     self.stop()
@@ -226,10 +253,17 @@ class AssistantRuntime:
                     self.speak_response(response)
         finally:
             print("Assistant loop stopped")
+            if on_exit_callback:
+                print("Triggering command mode exit callback...")
+                try:
+                    on_exit_callback()
+                except Exception as exc:
+                    print(f"Command mode exit callback error: {exc}")
 
     def stop(self) -> None:
         print("Stopping assistant runtime...")
         self.running = False
+        self.stop_speaking()
 
         if hasattr(self, "wake_listener") and self.wake_listener:
             print("Stopping wake listener...")

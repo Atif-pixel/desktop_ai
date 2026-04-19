@@ -152,9 +152,8 @@ class TrayApp:
         try:
             self._runtime.wake_mode = False
 
-            # Requirement: wake listener NEVER restarts after switching to command mode.
+            # Stop wake listener for command mode, but keep reference to restart later
             wake = self._wake
-            self._wake = None
             if wake is not None:
                 wake.stop()
             self._runtime.wake_listener = None
@@ -168,11 +167,25 @@ class TrayApp:
             except Exception:
                 pass
 
-            self._runtime.run_continuous_listener()
+            self._runtime.run_continuous_listener(on_exit_callback=self._on_command_mode_exit)
         except Exception as exc:
             print(f"Command mode crashed: {exc}")
         finally:
             self._lock.release()
+
+    def _on_command_mode_exit(self) -> None:
+        print("Command mode exited, restarting wake word listener...")
+        self._runtime.wake_mode = True
+
+        # Restart wake listener safely
+        if self._wake and not self._wake.is_running():
+            print("Restarting wake listener...")
+            st = self._wake.start()
+            if st.ok:
+                self._runtime.wake_listener = self._wake
+                print("Wake listener restarted successfully.")
+            else:
+                print(f"Failed to restart wake listener: {st.error}")
 
     def _listen_once(self, icon, source: str) -> None:
         if not self._lock.acquire(blocking=False):

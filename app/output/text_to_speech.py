@@ -1,4 +1,4 @@
-﻿"""Text-to-speech.
+"""Text-to-speech.
 
 Step 4: basic local/offline-friendly TTS suitable for Windows 10/11.
 
@@ -27,6 +27,9 @@ class TextToSpeech:
 
     def speak(self, text: str) -> None:
         raise NotImplementedError
+
+    def stop(self) -> None:
+        pass
 
 
 class NullTextToSpeech(TextToSpeech):
@@ -58,37 +61,96 @@ class WindowsPowerShellTextToSpeech(TextToSpeech):
         self._exe = executable or _find_windows_powershell_exe()
         if not self._exe:
             raise TextToSpeechError("PowerShell executable not found.")
+        self._proc: Optional[subprocess.Popen] = None
+
+    def stop(self) -> None:
+        proc = self._proc
+        if proc is not None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            self._proc = None
 
     def speak(self, text: str) -> None:
         text = (text or "").strip()
         if not text:
             return None
 
-        proc = _run_powershell_system_speech(
-            exe_path=self._exe,
-            text=text,
-            rate=self._rate,
-        )
+        self.stop()
 
-        if proc.returncode == 0:
+        script = _build_powershell_script(rate=self._rate)
+
+        try:
+            self._proc = subprocess.Popen(
+                [
+                    self._exe,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-STA",
+                    "-WindowStyle",
+                    "Hidden",
+                    "-Command",
+                    script,
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            stdout, stderr = self._proc.communicate(input=text)
+            returncode = self._proc.returncode
+        except Exception as exc:
+            raise TextToSpeechError(f"Failed to run PowerShell TTS: {exc}") from exc
+        finally:
+            self._proc = None
+
+        if returncode == 0:
             return None
 
         # Retry once with 32-bit PowerShell if available (some systems behave differently).
         alt = _find_windows_powershell_exe(prefer_syswow64=True)
         if alt and os.path.abspath(alt).lower() != os.path.abspath(self._exe).lower():
-            proc2 = _run_powershell_system_speech(exe_path=alt, text=text, rate=self._rate)
-            if proc2.returncode == 0:
-                return None
-            proc = proc2
+            try:
+                self._proc = subprocess.Popen(
+                    [
+                        alt,
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-STA",
+                        "-WindowStyle",
+                        "Hidden",
+                        "-Command",
+                        script,
+                    ],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                stdout2, stderr2 = self._proc.communicate(input=text)
+                returncode = self._proc.returncode
+            except Exception:
+                pass
+            finally:
+                self._proc = None
 
-        stderr = (proc.stderr or "").strip()
-        stdout = (proc.stdout or "").strip()
-        details = stderr or stdout
+            if returncode == 0:
+                return None
+            
+            stderr = stderr2
+            stdout = stdout2
+
+        stderr_clean = (stderr or "").strip()
+        stdout_clean = (stdout or "").strip()
+        details = stderr_clean or stdout_clean
         if details:
             details = " ".join(details.split())
-            raise TextToSpeechError(f"PowerShell TTS failed (rc={proc.returncode}): {details}")
+            raise TextToSpeechError(f"PowerShell TTS failed (rc={returncode}): {details}")
 
-        raise TextToSpeechError(f"PowerShell TTS failed (rc={proc.returncode}).")
+        raise TextToSpeechError(f"PowerShell TTS failed (rc={returncode}).")
 
 
 def default_text_to_speech(config: TextToSpeechConfig) -> TextToSpeech:
@@ -107,9 +169,8 @@ def default_text_to_speech(config: TextToSpeechConfig) -> TextToSpeech:
     return NullTextToSpeech()
 
 
-def _run_powershell_system_speech(*, exe_path: str, text: str, rate: int) -> subprocess.CompletedProcess[str]:
-    # Read text from stdin to avoid quoting/escaping problems.
-    script = (
+def _build_powershell_script(*, rate: int) -> str:
+    return (
         "$ErrorActionPreference='Stop';"
         "Add-Type -AssemblyName System.Speech;"
         "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer;"
@@ -118,27 +179,6 @@ def _run_powershell_system_speech(*, exe_path: str, text: str, rate: int) -> sub
         "$t=[Console]::In.ReadToEnd();"
         "if (-not [string]::IsNullOrWhiteSpace($t)) { $s.Speak($t) }"
     )
-
-    try:
-        return subprocess.run(
-            [
-                exe_path,
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-STA",
-                "-WindowStyle",
-                "Hidden",
-                "-Command",
-                script,
-            ],
-            input=text,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except Exception as exc:  # pragma: no cover
-        raise TextToSpeechError(f"Failed to run PowerShell TTS: {exc}") from exc
 
 
 def _clamp_int(value: int, lo: int, hi: int) -> int:
